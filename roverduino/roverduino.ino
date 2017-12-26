@@ -1,3 +1,10 @@
+#include <Adafruit_GFX.h>
+#include <Adafruit_SPITFT.h>
+#include <Adafruit_SPITFT_Macros.h>
+#include <gfxfont.h>
+
+#include <Adafruit_LEDBackpack.h>
+
 /*
 
  -= R o v e r d u i n o =-
@@ -8,7 +15,7 @@
 
  Hardware & Software by Flavio & Davide Giovannangeli
  Created on August 2015
- Updated on August 2016
+ Updated on December 2017
  flavio.giovannangeli@gmail.com
 
 */
@@ -24,6 +31,8 @@ Adafruit_8x8matrix matrix = Adafruit_8x8matrix();
 #define fotoresistenza A1     // Pin analogico di INPUT per la fotoresistenza.
 #define lm35           A2     // Pin analogico di INPUT per il sensore di temperatura LM35.
 #define cicalino       A3     // Pin analogico di OUTPUT per il cicalino (buzzer).
+#define red_led        A4     // Pin digitale di OUTPUT per il LED RGB colore ROSSO.
+#define blu_led        A5     // Pin digitale di OUTPUT per il LED RGB colore BLU.
 #define radar          12     // Pin digitale di INPUT/OUTPUT per radar rilevamento ostacoli.
 #define motdx1a        5      // Pin digitale di OUTPUT per canale 1A motore destro.
 #define motdx2a        6      // Pin digitale di OUTPUT per canale 2A motore destro.
@@ -45,7 +54,7 @@ unsigned long encdx_time_final;  //
 unsigned long encdx_time_lap;    //
 int   DEBUG = 0;                 // Debug: 0=OFF, 1=ON
 float vs = 343.80;               // Velocita' del suono in aria a 20C (default)
-int   ostacolo = 7;           // Distanza minima dall'ostacolo (in centimetri)
+int   ostacolo = 10;           // Distanza minima dall'ostacolo (in centimetri)
 int   cicafreq = 550;         // Frequenza cicalino
 int   dirrover = 0;	          // Direzione rover: 0=Avanti, 1=indietro, 2=fermo
 int   angolo = 0;             // Angolo rover
@@ -68,6 +77,8 @@ void setup() {
   pinMode(fotoresistenza, INPUT);                 // Pin analogico di INPUT per la fotoresistenza.
   pinMode(lm35, INPUT);                           // Pin analogico di INPUT per il sensore di temperatura LM35.
   pinMode(cicalino, OUTPUT);                      // Pin digitale di OUTPUT per il cicalino (buzzer).
+  pinMode(red_led, OUTPUT);                       // Pin digitale di OUTPUT per il LED RGB colore ROSSO.
+  pinMode(blu_led, OUTPUT);                       // Pin digitale di OUTPUT per il LED RGB colore BLU.
   pinMode(motdx1a, OUTPUT);                       // Pin digitale di OUTPUT per canale 1A motore destro.
   pinMode(motdx2a, OUTPUT);                       // Pin digitale di OUTPUT per canale 2A motore destro.
   pinMode(motsx3a, OUTPUT);                       // Pin digitale di OUTPUT per canale 3A motore sinistro.
@@ -105,24 +116,25 @@ void setup() {
     Serial.println(vs);                           //
   }
   // READY! 
-  rover_beep();                                   // BEEP di 'pronto'. 
+  rover_beep();                                   // BEEP di 'pronto'.
+  digitalWrite(blu_led, HIGH);                    // LED BLU acceso.
 }
 
 // --------------------------------------------------------------------------------------------------
 // --- S T A R T  L O O P ---------------------------------------------------------------------------
 // --------------------------------------------------------------------------------------------------
 void loop() {
-  // GO ROVER!     
-  time = millis();                                // Variabile millis               
+  // GO ROVER GO!     
+  time = millis();                                // Variabile millis
   int valdist = lettura_dist();                   // Rilevamento distanza eventuale ostacolo
   if (valdist > 0 && valdist < ostacolo)          // Se distanza ostacolo minore della distanza impostata (7 cm) ferma il rover
   {                                               // 
     display_faces(3);                             // Presenza ostacolo, rover triste! :(
     rover_fermo();                                // Rover fermo! 
     delay(200);                                   // Attesa 200ms.
-//    if (valdist > 7)                              // Se distanza ostacolo < 7cm non andare indietro.
-//    {                                             //
-//      rover_indietro();                           // Rover indietro.
+//    if (valdist > ostacolo)                     // Se distanza ostacolo < 10 cm non andare indietro.
+//    {                                           //
+//      rover_indietro();                         // Rover indietro.
 //    }
     rover_destra(90);                             // Rover a destra di 90 gradi!
     rover_fermo();                                // Rover fermo!
@@ -286,7 +298,7 @@ void display_saluto(){
     for (int8_t x=0; x>=-108; x--) {
       matrix.clear();
       matrix.setCursor(x,0);
-      matrix.print("Hello! I'm ready!");
+      matrix.print("Roverduino");
       matrix.writeDisplay();
       delay(80);
   }
