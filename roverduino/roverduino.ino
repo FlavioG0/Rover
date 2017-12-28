@@ -1,50 +1,51 @@
-#include <Adafruit_GFX.h>
-#include <Adafruit_SPITFT.h>
-#include <Adafruit_SPITFT_Macros.h>
-#include <gfxfont.h>
-
-#include <Adafruit_LEDBackpack.h>
-
 /*
 
  -= R o v e r d u i n o =-
  
  Piccolo rover dotato di un modulo ad ultrasuoni per rilevamento ostacoli,
- un display 8x8 per interazione utente, un cicalino, una fotoresistenza, un
- microfono, un sensore di temperatura e encoder ottico incrementale sulle ruote.
+ un display 8x8 per interazione utente, un cicalino, una fotores, un
+ microfono, un sensore di temperatura ed encoder ottico incrementale sulle ruote.
 
  Hardware & Software by Flavio & Davide Giovannangeli
  Created on August 2015
- Updated on December 2017
+ Updated on December 2017 (aggiunta gestione LED RGB e ottimizzazione codice)
  flavio.giovannangeli@gmail.com
 
 */
 
 // Librerie display 8x8
 #include <Wire.h>
-#include "Adafruit_LEDBackpack.h"
-#include "Adafruit_GFX.h"
+#include <gfxfont.h>
+#include <Ultrasonic.h>
+#include <Adafruit_GFX.h>
+#include <Adafruit_SPITFT.h>
+#include <Adafruit_LEDBackpack.h>
+#include <Adafruit_SPITFT_Macros.h>
+
 Adafruit_8x8matrix matrix = Adafruit_8x8matrix();
 
-// Mappa componenti Rover
-#define microfono      A0     // Pin analogico di INPUT per il microfono.
-#define fotoresistenza A1     // Pin analogico di INPUT per la fotoresistenza.
-#define lm35           A2     // Pin analogico di INPUT per il sensore di temperatura LM35.
-#define cicalino       A3     // Pin analogico di OUTPUT per il cicalino (buzzer).
-#define red_led        A4     // Pin digitale di OUTPUT per il LED RGB colore ROSSO.
-#define blu_led        A5     // Pin digitale di OUTPUT per il LED RGB colore BLU.
-#define radar          12     // Pin digitale di INPUT/OUTPUT per radar rilevamento ostacoli.
-#define motdx1a        5      // Pin digitale di OUTPUT per canale 1A motore destro.
-#define motdx2a        6      // Pin digitale di OUTPUT per canale 2A motore destro.
-#define motsx3a        8      // Pin digitale di OUTPUT per canale 3A motore sinistro.
-#define motsx4a        4      // Pin digitale di OUTPUT per canale 4A motore sinistro.
-#define enmotdx        9      // Pin digitale di OUTPUT (PWM) per controllo motore destro (1,2EN).
-#define enmotsx        10     // Pin digitale di OUTPUT (PWM) per controllo motore sinistro (3,4EN).
-#define encoddx        1      // Pin digitale di INPUT per encoder ruota destra.
-#define encodsx        7      // Pin digitale di INPUT per encoder ruota sinistra.
-#define swretro        0      // Pin digitale di INPUT per microswitch rilevamento ostacolo in retromarcia.
+// Mappatura dispositivi Rover
+#define microfono      A0     // IN analogico microfono.
+#define fotores        A1     // IN analogico fotores.
+#define lm35           A2     // IN analogico sensore di temperatura LM35.
+#define cicalino       A3     // OUT digitale cicalino.
+#define red_led        A4     // OUT digitale LED RGB colore ROSSO.
+#define blu_led        A5     // OUT digitale LED RGB colore BLU.
+#define motdx1a        5      // OUT digitale motore DX - canale 1A.
+#define motdx2a        6      // OUT digitale motore DX - canale 2A.
+#define motsx3a        8      // OUT digitale motore SX - canale 3A.
+#define motsx4a        4      // OUT digitale motore SX - canale 4A.
+#define enmotdx        9      // OUT digitale PWM controllo velocita' motore DX (1,2EN).
+#define enmotsx        10     // OUT digitale PWM controllo velocita' motore SX (3,4EN).
+#define encoddx        1      // IN digitale encoder ruota DX.
+#define encodsx        7      // IN digitale encoder ruota SX.
+#define swretro        0      // IN digitale microswitch rilevamento ostacolo in retromarcia.
+
+Ultrasonic usradar(12);       // IN-OUT sensore ultrasuoni per rilevamento ostacoli.
 
 // Variabili globali
+int MANUTENZIONE = 0;            // Modalita' manutenzione (debug sensori su seriale attivo): 0=OFF, 1=ON
+
 unsigned long time;              // Time
 unsigned long encsx_time;        //
 unsigned long encsx_time_final;  //
@@ -52,104 +53,110 @@ unsigned long encsx_time_lap;    //
 unsigned long encdx_time;        //
 unsigned long encdx_time_final;  //
 unsigned long encdx_time_lap;    //
-int   DEBUG = 0;                 // Debug: 0=OFF, 1=ON
-float vs = 343.80;               // Velocita' del suono in aria a 20C (default)
-int   ostacolo = 10;           // Distanza minima dall'ostacolo (in centimetri)
-int   cicafreq = 550;         // Frequenza cicalino
-int   dirrover = 0;	          // Direzione rover: 0=Avanti, 1=indietro, 2=fermo
-int   angolo = 0;             // Angolo rover
-int   valspeed = 0;           // Velocita' ruote
-int   intcntdx = 0;           // Contatore encoder ruota destra
-int   intcntsx = 0;           // Contatore encoder ruora sinistra
-int   fcrsx = 255;            // Fattore correzione ruota sinistra
-int   fcrdx = 255;            // Fattore correzione ruota destra
+
+int   dmin_obstacle = 15;        // Distanza minima dall'ostacolo (in centimetri)
+int   dirrover = 0;	             // Direzione rover: 0=Avanti, 1=indietro, 2=fermo
+int   angolo = 0;                // Angolo rover
+int   valspeed = 0;              // Velocita' ruote
+int   intcntdx = 0;              // Contatore encoder ruota DX
+int   intcntsx = 0;              // Contatore encoder ruora SX
+int   fcrsx = 255;               // Fattore correzione ruota SX
+int   fcrdx = 255;               // Fattore correzione ruota DX
 
 // --------------------------------------------------------------------------------------------------
 // --- S E T U P ------------------------------------------------------------------------------------
 // --------------------------------------------------------------------------------------------------
 void setup() {
+  
   // Inizializza millis
-  time = millis();                                // Variabile millis       
-  encsx_time = millis();                          // time encoder SX
-  encdx_time = millis();                          // time encoder DX
-  // Inizializza porte I/O
-  pinMode(microfono, INPUT);                      // Pin analogico di INPUT per il microfono.
-  pinMode(fotoresistenza, INPUT);                 // Pin analogico di INPUT per la fotoresistenza.
-  pinMode(lm35, INPUT);                           // Pin analogico di INPUT per il sensore di temperatura LM35.
-  pinMode(cicalino, OUTPUT);                      // Pin digitale di OUTPUT per il cicalino (buzzer).
-  pinMode(red_led, OUTPUT);                       // Pin digitale di OUTPUT per il LED RGB colore ROSSO.
-  pinMode(blu_led, OUTPUT);                       // Pin digitale di OUTPUT per il LED RGB colore BLU.
-  pinMode(motdx1a, OUTPUT);                       // Pin digitale di OUTPUT per canale 1A motore destro.
-  pinMode(motdx2a, OUTPUT);                       // Pin digitale di OUTPUT per canale 2A motore destro.
-  pinMode(motsx3a, OUTPUT);                       // Pin digitale di OUTPUT per canale 3A motore sinistro.
-  pinMode(motsx4a, OUTPUT);                       // Pin digitale di OUTPUT per canale 4A motore sinistro.
-  pinMode(encoddx, INPUT);                        // Pin digitale di INPUT per encoder ruota destra.
-  pinMode(encodsx, INPUT);                        // Pin digitale di INPUT per encoder ruota sinistra.
-  pinMode(swretro, INPUT);                        // Pin digitale di INPUT per microswitch rilevamento ostacolo in retromarcia.
+  time = millis();       // Variabile millis       
+  encsx_time = time;     // time encoder SX
+  encdx_time = time;     // time encoder DX
+  
+  // Inizializza porte I/O come indicato nella mappatura
+  pinMode(microfono, INPUT);
+  pinMode(fotores, INPUT);
+  pinMode(lm35, INPUT);
+  pinMode(cicalino, OUTPUT);
+  pinMode(red_led, OUTPUT);
+  pinMode(blu_led, OUTPUT);
+  pinMode(motdx1a, OUTPUT);
+  pinMode(motdx2a, OUTPUT);
+  pinMode(motsx3a, OUTPUT);
+  pinMode(motsx4a, OUTPUT);
+  pinMode(encoddx, INPUT); 
+  pinMode(encodsx, INPUT);
+  pinMode(swretro, INPUT);
+  
   // Inizializza interrupt
-  attachInterrupt(digitalPinToInterrupt(0), rover_fermo, RISING);        // Interrupt su pulsante rilevamento ostacolo in retromarcia (pin.0/RX).
-  attachInterrupt(digitalPinToInterrupt(1), encoder_dx, CHANGE);         // Interrupt su encoder ruota DX (pin.1/TX).
-  attachInterrupt(digitalPinToInterrupt(7), encoder_sx, CHANGE);         // Interrupt su encoder ruota SX (pin.7).
-  // Inizializza comunicazione seriale
-  if (DEBUG == 1)                                 // Se in DEBUG attiva comunicazione seriale.
-  {                                               //
-    Serial.begin(9600);                           // 
-  }      
+  attachInterrupt(digitalPinToInterrupt(0), rover_fermo, RISING);        // Interrupt pulsante rilevamento ostacolo in retromarcia (pin 0/RX)
+  attachInterrupt(digitalPinToInterrupt(1), encoder_dx, CHANGE);         // Interrupt encoder ruota DX (pin 1/TX)
+  attachInterrupt(digitalPinToInterrupt(7), encoder_sx, CHANGE);         // Interrupt encoder ruota SX (pin 7)
+
   // Inizializza display
-  matrix.begin(0x70);                             // Indirizzo I2C display 8x8.
-  matrix.setRotation(1);                          // Imposta orientamento corretto display.
-  // Display WAIT
-  //display_wait();                               // Mostra clessidra attesa per letture temperatura.
-  // Inizializza velocita' del suono.
-  //vs = vel_suono();                             // Calcolo velocita' del suono in base a temperatura ambiente (sborone!) 
-  // Inizializza motori
-  motori("ON");                                   // Attiva motori.
-  rover_fermo();                                  // Il rover è fermo all'accensione.
-  // Presentazione (no in debug!)
-  if (DEBUG != 1)                                 // Se in DEBUG salta il saluto.
-  {                                               //
-    display_saluto();                             // Messaggio di saluto all'accensione.
+  matrix.begin(0x70);                             // Indirizzo I2C display 8x8
+  matrix.setRotation(1);                          // Imposta orientamento display
+  
+  if (MANUTENZIONE == 1) {                        // Se in MANUTENZIONE...
+    Serial.begin(9600);                           //   attiva comunicazione seriale
+    motori("OFF");                                //   disattiva motori
+    Serial.println("Test sensori...");            //   Avviso test sensori
+  } 
+  else {                                          // altrimenti...
+    display_saluto();                             //   visualizza messaggio di benvenuto
+    digitalWrite(blu_led, HIGH);                  //   Led blu acceso                             
+    motori("ON");                                 //   Attiva motori
+    rover_fermo();                                //   Rover è fermo all'accensione
+    Beep();                                       //   BEEP!
   }
-  else
-  {                                               //  Se in debug mostra info sulla seriale.
-    Serial.print("Velocita del suono:");          //
-    Serial.println(vs);                           //
-  }
-  // READY! 
-  rover_beep();                                   // BEEP di 'pronto'.
-  digitalWrite(blu_led, HIGH);                    // LED BLU acceso.
-}
+} // FINE SETUP.
+    
 
 // --------------------------------------------------------------------------------------------------
 // --- S T A R T  L O O P ---------------------------------------------------------------------------
 // --------------------------------------------------------------------------------------------------
 void loop() {
-  // GO ROVER GO!     
-  time = millis();                                // Variabile millis
-  int valdist = lettura_dist();                   // Rilevamento distanza eventuale ostacolo
-  if (valdist > 0 && valdist < ostacolo)          // Se distanza ostacolo minore della distanza impostata (7 cm) ferma il rover
-  {                                               // 
-    display_faces(3);                             // Presenza ostacolo, rover triste! :(
-    rover_fermo();                                // Rover fermo! 
-    delay(200);                                   // Attesa 200ms.
-//    if (valdist > ostacolo)                     // Se distanza ostacolo < 10 cm non andare indietro.
-//    {                                           //
-//      rover_indietro();                         // Rover indietro.
-//    }
-    rover_destra(90);                             // Rover a destra di 90 gradi!
-    rover_fermo();                                // Rover fermo!
-  }
+  
+  // GO ROVER GO!    
+  if (MANUTENZIONE == 1) {                        // Se in MANUTENZIONE...
+    int luxval = ReadFres();                      //   test fotoresistenza
+    String slux = "Fotoresistenza: ";
+    Serial.println(slux + luxval);    
+    int micval = ReadMic();                       //   test microfono
+    String smic = "Microfono: ";
+    Serial.println(smic + micval);    
+    float airtemp = ReadAirTemp();                //   test LM35 (temperatura)
+    String sairtemp = "Temperatura: ";
+    Serial.println(sairtemp + airtemp);    
+    int dobstacle = ReadDistObstacle();           //   test radar ultrasuoni
+    String sdobstacle = "Dist. ostacolo: ";
+    Serial.println(sdobstacle + dobstacle);
+    delay(3000);                                  //   attesa 3s.
+  }  
   else
   {
-    display_faces(1);                             // Rover sorridi! :)
-    rover_avanti(255);                            // Rover avanti tutta!
+    int dobstacle = ReadDistObstacle();             // Rilevamento distanza eventuale ostacolo
+    if (dobstacle > 0 && dobstacle < dmin_obstacle) // Se distanza ostacolo minore della distanza impostata (7cm) ferma il rover
+    {                                               // 
+      rover_fermo();                                //   Presenza ostacolo nel range impostato! Ferma il Rover! 
+      display_faces(3);                             //   Visualizza faccina triste :(
+      delay(200);                                   //   Attesa 200ms.
+      rover_destra(90);                             //   Rover a destra di 90 gradi
+      rover_fermo();                                //   Rover fermo!
+    }
+    else                                            // altrimenti...
+    {
+      rover_avanti(255);                            //   Rover avanti tutta!
+      display_faces(1);                             //   Rover sorridente :)
+    }
   }
 }
 
 // --------------------------------------------------------------------------------------------------
 // --- G E S T I O N E  M O T O R I -----------------------------------------------------------------
 // --------------------------------------------------------------------------------------------------
-// Stato ON-OFF motori.
+
+// ON-OFF motori.
 void motori(String stato) {
    if (stato == "ON") {
       digitalWrite(enmotdx, HIGH);
@@ -160,6 +167,7 @@ void motori(String stato) {
       digitalWrite(enmotsx, LOW);
    } 
 }
+
 // Rover avanti con velocita' determinata.
 void rover_avanti(int valspeed) {
   dirrover = 0;
@@ -185,11 +193,12 @@ void rover_avanti(int valspeed) {
   digitalWrite(motsx3a, HIGH);
   digitalWrite(motsx4a, LOW);
 }
+
 // Selezione velocita' con correzione differenza velocita ruote.
 void vel_motori(int valspeed, int fattcorrdx, int fattcorrsx) {
    int fcdx = valspeed-fattcorrdx;
    int fcsx = valspeed-fattcorrsx;
-   if (DEBUG == 1) 
+   if (MANUTENZIONE == 1) 
    {
       Serial.println(fcdx);          
       Serial.println(fcsx);          
@@ -198,6 +207,7 @@ void vel_motori(int valspeed, int fattcorrdx, int fattcorrsx) {
    analogWrite(enmotdx, fcdx);
    analogWrite(enmotsx, fcsx);
 }
+
 // Rover fermo! Ferma entrambi i motori.
 void rover_fermo() {
    dirrover = 1;
@@ -206,6 +216,7 @@ void rover_fermo() {
    digitalWrite(motsx3a, LOW);
    digitalWrite(motsx4a, LOW);
 }
+
 // Rover a destra di X gradi.
 void rover_destra(int angolo) {
   digitalWrite(motdx1a, HIGH);
@@ -215,6 +226,7 @@ void rover_destra(int angolo) {
   delay(800);
   rover_fermo();
 }
+
 // Rover a sinistra di X gradi.
 void rover_sinistra(int angolo) {
   digitalWrite(motdx1a, LOW);
@@ -224,6 +236,7 @@ void rover_sinistra(int angolo) {
   delay(800);
   rover_fermo();
 }
+
 // Rover indietro.
 void rover_indietro() {
   dirrover = 1;
@@ -233,6 +246,7 @@ void rover_indietro() {
   digitalWrite(motsx4a, HIGH);
   delay(1000);
 }
+
 // --------------------------------------------------------------------------------------------------
 // --- G E S T I O N E  D I S P L A Y ---------------------------------------------------------------
 // --------------------------------------------------------------------------------------------------
@@ -282,13 +296,15 @@ static const uint8_t PROGMEM
     B00100000,
     B00100000,
     B00000000 };
+    
 int display_lux(){
      // Adatta luminosita' del display alla luminosita' ambientale.
-     int luxval = lettura_fres();         // Lettura valore luminosita ambientale.
+     int luxval = ReadFres();         // Lettura valore luminosita ambientale.
      int displux = int(luxval/68);        // Luminosita display da 1-15; calcolato valore fotores. 0-1024.
      if (displux == 0) displux = 1;       // Se valoreluminosita'<1 imposta a 1.
      return displux;
 }
+
 void display_saluto(){
     // Mostra saluto sul display.
     matrix.setBrightness(display_lux());  // Adatta luminosita' del display alla luminosita' ambientale.
@@ -301,8 +317,9 @@ void display_saluto(){
       matrix.print("Roverduino");
       matrix.writeDisplay();
       delay(80);
-  }
+   }
 }
+
 void display_write(char mychar){
     // Mostra un carattere sul display.
     matrix.setBrightness(display_lux());  // Adatta luminosita' del display alla luminosita' ambientale.
@@ -314,11 +331,13 @@ void display_write(char mychar){
     matrix.print(mychar);
     matrix.writeDisplay();
 }
+
 void display_clear() {
    // Pulisci display.
    matrix.clear();
    matrix.writeDisplay();
 }
+
 void display_faces(int face) {
    // Mostra faccine :)
    matrix.clear();
@@ -337,6 +356,7 @@ void display_faces(int face) {
    }
    matrix.writeDisplay();
 }
+
 void display_wait() {
    // Wait
    matrix.clear();
@@ -344,6 +364,7 @@ void display_wait() {
    matrix.drawBitmap(0, 0, wait_bmp, 8, 8, LED_ON);
    matrix.writeDisplay();
 }
+
 void display_park() {
    // Parking
    matrix.clear();
@@ -355,52 +376,37 @@ void display_park() {
 // --------------------------------------------------------------------------------------------------
 // --- G E S T I O N E  S E N S O R I ---------------------------------------------------------------
 // --------------------------------------------------------------------------------------------------
-int lettura_fres(){
-  // Lettura valore fotoresistenza.
-  int luxval = analogRead(fotoresistenza);           // Lettura valore luminosita ambientale.
+
+int ReadFres(){
+  // Lettura valore fotoresistenza (luminosita' ambiente)
+  int luxval = analogRead(fotores);
   return luxval;
 }
-int lettura_micp(){
-  // Lettura valore microfono.
-  int micval = analogRead(microfono);                // Lettura valore suoni ambientali.
+
+int ReadMic(){
+  // Lettura valore microfono (suoni ambiente)
+  int micval = analogRead(microfono);
   return micval;
 }
-float lettura_airtemp(){
-  // Lettura temperatura da sonda LM35
-  int lm35sens = analogRead(fotoresistenza);         // Lettura valore di temperatura dell'aria   
-  int mv = (lm35sens/1023.0)*5000;                   // Calcolo millivolt in uscita dal sensore LM35.
-  if (DEBUG == 1) 
-  {
-     Serial.println(mv);                             // Info millivolt in uscita LM35.
-  }
-  float airtemp = mv/10;                             // Valore temperatura ambiente rover.
+
+float ReadAirTemp(){
+  // Lettura temperatura ambiente
+  int lm35val = analogRead(lm35);                    // Lettura valore di temperatura dell'aria   
+  int lm35mv = (lm35val/1023.0)*5000;                // Calcolo millivolt in uscita dal sensore LM35.
+  float airtemp = lm35mv/10;                         // Valore temperatura ambiente rover.
   return airtemp;
 }  
-int lettura_dist(){
+
+int ReadDistObstacle(){
   // Lettura valore distanza ostacolo in cm.
   // In input riceve la temperatura ambiente.
-  pinMode(radar, OUTPUT);                            // Pin digitale di OUTPUT per radar rilevamento ostacoli.
-  digitalWrite(radar, LOW);                          // Digital LOW.
-  delayMicroseconds(2);                              // Delay 2 microsec.
-  digitalWrite(radar, HIGH);                         // Invio impulso di 10 microsec.
-  delayMicroseconds(5);                              //  
-  digitalWrite(radar, LOW);                          //
-  pinMode(radar, INPUT);                             // Pin digitale di INPUT per radar rilevamento ostacoli.
-  int echotime = pulseIn(radar, HIGH);               // Calcolo tempo A/R segnale.
-  //int airvelsound = 331.45 + (0.62 * ta);          // Calcolo velocita' del suono nell'aria in base alla temperatura rilevata al momento.
-  int dist = (vs/10000) * echotime;                  // Calcolo distanza ostacolo (v=s*t).
-  dist = dist/2;
-  //int dist = microsecondsToCentimeters(echotime);
-  if (DEBUG == 1) 
-  {
-     Serial.print("Echo time:");                     // Info echotime.
-     Serial.println(echotime);                       // Info echotime.
-     Serial.print("Air.Vel.Sound:");
-     Serial.println(vs);
-     Serial.print("Dist:");                          // Info echotime.
-     Serial.println(dist);                           // Info distanza ostacolo.
-  }
-  return dist;
+  int dobstacle = usradar.MeasureInCentimeters();
+  return dobstacle;
+}
+
+void Beep(){
+  // BEEP!
+  tone(cicalino,900,250);
 }
 
 // --------------------------------------------------------------------------------------------------
@@ -428,35 +434,5 @@ void encoder_sx(){
     intcntsx = 0;
     encsx_time = millis();
   }
-}
-
-// --------------------------------------------------------------------------------------------------
-// --- R O U T I N E  V A R I E ---------------------------------------------------------------------
-// --------------------------------------------------------------------------------------------------
-void rover_beep(){
-  // BEEP!
-  tone(cicalino,cicafreq,500);
-}
-float vel_suono(){
-  // Calcolo della velocita' del suono in base alla temperatura ambiente rover.
-  // Esegue 3 letture della temperatura ogni 10s e poi fa la media.
-  float somma = 0.00;
-  float tam = 0.00;
-  int i = 0;
-  for (int i=0;i<3;i++){
-      float ta = lettura_airtemp();
-      somma = somma + ta;
-      delay(10000);
-  }
-  tam = (somma/3.0);                  // Media delle temperature
-  vs = (331.45)+(0.62*tam);             
-  if (DEBUG == 1) 
-  {
-     Serial.print("LM35 uscita (millivolt):");
-     Serial.println(tam);             // Info millivolt in uscita LM35.
-     Serial.print("Vel. suono:");
-     Serial.println(vs);
-  }
-  return vs;
 }
 
